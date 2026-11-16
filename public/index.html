@@ -44,6 +44,7 @@ svg text{font-family:inherit}
   <h1>Simulasi Random Forest</h1>
   <p class="sub">Studi kasus: Prediksi tingkat kemacetan lalu lintas di waktu tertentu. Setiap tahapan dihitung otomatis: bootstrap sampling, entropy, gain, split info, gain ratio, pohon keputusan, lalu mayoritas vote.
     <span class="badge" id="src">memuat…</span></p>
+  <p class="sub" id="note" style="color:#e5a35f"></p>
 
   <h2>1. Data kondisi lalu lintas</h2>
   <div class="card scroll"><table id="tbl-data"></table></div>
@@ -74,18 +75,42 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 const cls = v => `<span class="${v === 'Macet' ? 'macet' : 'lancar'}">${esc(v)}</span>`;
 let FOREST = null, PATHS = null;
 
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
 async function loadForest(useInputs) {
   let url = '/api/forest';
   if (useInputs) {
     url += '?' + new URLSearchParams({seed: $('#seed').value, n_trees: $('#ntrees').value, m: $('#m').value});
   }
-  const r = await fetch(url);
-  FOREST = await r.json();
+  const wanted = {seed: +$('#seed').value, n: +$('#ntrees').value, m: +$('#m').value};
+  let note = '';
+  try {
+    FOREST = await getJSON(url);
+  } catch (e) {
+    // API tidak tersedia -> pakai model.json statis (hasil ekspor joblib)
+    try {
+      FOREST = await getJSON('/model.json');
+      FOREST.source = 'static';
+      if (useInputs && (wanted.seed !== FOREST.meta.seed || wanted.n !== FOREST.meta.n_trees || wanted.m !== FOREST.meta.m)) {
+        note = 'Backend API tidak tersedia, jadi hutan tidak bisa dibangun ulang dengan pengaturan lain. Menampilkan model default (seed ' + FOREST.meta.seed + ').';
+      }
+    } catch (e2) {
+      $('#src').textContent = 'gagal memuat data';
+      $('#note').innerHTML = '<span class="macet">Data tidak dapat dimuat (' + esc(e2.message) + '). Cek /api/health dan pastikan public/model.json ikut ter-deploy.</span>';
+      return;
+    }
+  }
   PATHS = null;
   $('#ntrees').value = FOREST.meta.n_trees;
   $('#m').value = FOREST.meta.m;
   $('#seed').value = FOREST.meta.seed;
-  $('#src').textContent = FOREST.source === 'joblib' ? 'model: rf_kemacetan.joblib' : 'dibangun ulang oleh rf_engine';
+  const names = {joblib: 'model: rf_kemacetan.joblib', csv: 'model: dibangun dari CSV', engine: 'dibangun ulang oleh rf_engine', static: 'model.json (ekspor joblib, statis)'};
+  $('#src').textContent = names[FOREST.source] || FOREST.source;
+  $('#note').textContent = note;
   render();
 }
 
@@ -169,21 +194,44 @@ function treeSVG(root, path) {
   return s + '</svg>';
 }
 
+function majorityOf(counts) { return counts.Macet >= counts.Lancar ? 'Macet' : 'Lancar'; }
+
+function predictLocal(sample) {
+  const votes = FOREST.trees.map(t => {
+    let node = t.tree; const path = [];
+    while (node.type === 'node') {
+      const v = sample[node.attr];
+      const nx = node.children.find(c => c.value === v);
+      if (!nx) return {tree: t.index, label: node.majority, path, fallback: {attr: node.attr, value: v, counts: node.counts}};
+      path.push({attr: node.attr, value: v});
+      node = nx.node;
+    }
+    return {tree: t.index, label: node.label, path};
+  });
+  const counts = {Lancar: 0, Macet: 0};
+  votes.forEach(v => counts[v.label]++);
+  return {votes, counts, final: majorityOf(counts)};
+}
+
 async function predict() {
   const sample = {};
   FOREST.meta.attrs.forEach(a => sample[a] = $('#f-' + a).value);
-  const r = await fetch('/api/predict', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({sample, seed: +$('#seed').value, n_trees: +$('#ntrees').value, m: +$('#m').value})
-  });
-  const res = await r.json();
+  let res;
+  try {
+    res = await getJSON('/api/predict', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sample, seed: +$('#seed').value, n_trees: +$('#ntrees').value, m: +$('#m').value})
+    });
+  } catch (e) {
+    res = predictLocal(sample);  // cadangan: telusuri pohon yang sedang tampil
+  }
   if (res.error) { $('#result').innerHTML = `<p class="macet">${esc(res.error)}</p>`; return; }
   res.votes.forEach(v => {
     const t = FOREST.trees.find(t => t.index === v.tree);
     const box = $('#svg-' + v.tree);
     if (t && box) box.innerHTML = treeSVG(t.tree, v.path);
   });
-  $('#result').innerHTML = `<div class="votes">${res.votes.map(v => `<div class="vote"><b>Pohon ${v.tree}:</b> ${cls(v.label)}<small>${v.path.map(p => esc(p.attr) + '=' + esc(p.value)).join(' → ') || 'langsung ke daun'}</small></div>`).join('')}</div>
+  $('#result').innerHTML = `<div class="votes">${res.votes.map(v => `<div class="vote"><b>Pohon ${v.tree}:</b> ${cls(v.label)}<small>${v.path.map(p => esc(p.attr) + '=' + esc(p.value)).join(' → ') || 'langsung ke daun'}</small>${v.fallback ? `<small>Nilai ${esc(v.fallback.attr)}=${esc(v.fallback.value)} tidak ada pada cabang ini, jadi dipakai suara mayoritas node (Lancar ${v.fallback.counts.Lancar}, Macet ${v.fallback.counts.Macet}).</small>` : ''}</div>`).join('')}</div>
     <p>Suara Lancar: <b>${res.counts.Lancar}</b>, Macet: <b>${res.counts.Macet}</b></p>
     <p class="final">Prediksi: lalu lintas ${cls(res.final)}</p>`;
 }

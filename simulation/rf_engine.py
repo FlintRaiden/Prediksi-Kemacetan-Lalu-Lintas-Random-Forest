@@ -147,8 +147,11 @@ def predict_tree(node, sample):
 def predict_forest(forest, sample):
     votes = []
     for t in forest["trees"]:
-        label, path, _ = predict_tree(t["tree"], sample)
-        votes.append({"tree": t["index"], "label": label, "path": path})
+        label, path, last = predict_tree(t["tree"], sample)
+        fallback = None
+        if last["type"] == "node":  # nilai tidak ada pada cabang -> mayoritas node
+            fallback = {"attr": last["attr"], "value": sample[last["attr"]], "counts": last["counts"]}
+        votes.append({"tree": t["index"], "label": label, "path": path, "fallback": fallback})
     counts = {c: sum(1 for v in votes if v["label"] == c) for c in CLASSES}
     return {"votes": votes, "counts": counts, "final": majority(counts)}
 

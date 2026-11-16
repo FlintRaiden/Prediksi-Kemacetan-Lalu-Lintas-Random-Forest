@@ -1,13 +1,22 @@
-
-venv/
-.venv/
-env/
-
-
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+.venv/
+venv/
+env/
+.env
 
+# Jupyter
+.ipynb_checkpoints/
 
+# Vercel & OS
+.vercel/
 .DS_Store
 Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# CATATAN: models/rf_kemacetan.joblib dan public/model.json HARUS ikut di-commit
+# karena dipakai web saat deploy di Vercel.
