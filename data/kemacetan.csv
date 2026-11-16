@@ -1,0 +1,15 @@
+No,Waktu,Hari,Cuaca,Acara,Kemacetan
+1,Pagi,Hari Kerja,Cerah,Tidak,Macet
+2,Pagi,Hari Kerja,Hujan,Tidak,Macet
+3,Siang,Hari Kerja,Cerah,Tidak,Lancar
+4,Sore,Hari Kerja,Cerah,Tidak,Macet
+5,Sore,Hari Kerja,Hujan,Ada,Macet
+6,Malam,Hari Kerja,Cerah,Tidak,Lancar
+7,Pagi,Akhir Pekan,Cerah,Tidak,Lancar
+8,Siang,Akhir Pekan,Cerah,Ada,Macet
+9,Sore,Akhir Pekan,Hujan,Ada,Macet
+10,Malam,Akhir Pekan,Cerah,Ada,Macet
+11,Siang,Hari Kerja,Hujan,Tidak,Macet
+12,Malam,Akhir Pekan,Hujan,Tidak,Lancar
+13,Pagi,Akhir Pekan,Hujan,Tidak,Lancar
+14,Sore,Akhir Pekan,Cerah,Tidak,Lancar

@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulasi Random Forest – Prediksi Kemacetan Lalu Lintas</title>
+<style>
+:root{--bg:#0e1319;--card:#151c25;--line:#273241;--tx:#e6edf3;--mut:#8b9aab;--acc:#4fb3d9;--ok:#4ec27a;--bad:#e5645f;--or:#ee7a45}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:880px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 10px}h5{margin:18px 0 6px;font-size:13px}
+h5 small{color:var(--mut);font-weight:400}
+.sub{color:var(--mut);margin:0 0 6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{border:1px solid var(--line);padding:5px 9px;text-align:center;white-space:nowrap}
+th{background:#1c2632;color:#c9d6e3}
+td.ind{text-align:left;padding-left:22px}
+tr.tot td,tr.attr td{font-weight:600}
+tr.attr td:first-child{text-align:left}
+tr.best td{background:#1a2f27}
+.lancar{color:var(--ok);font-weight:600}.macet{color:var(--bad);font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+label{display:flex;flex-direction:column;font-size:11.5px;color:var(--mut);gap:3px}
+input,select{background:#0e1319;color:var(--tx);border:1px solid var(--line);border-radius:5px;padding:6px 8px;min-width:96px;font:inherit}
+button{background:var(--acc);color:#04202b;border:0;border-radius:5px;padding:8px 14px;font-weight:600;cursor:pointer;font:inherit;font-weight:600}
+button.alt{background:#2a3a4d;color:var(--tx)}
+details{border:1px solid var(--line);border-radius:8px;margin:10px 0;background:var(--card)}
+summary{cursor:pointer;padding:10px 14px;font-weight:600}
+details>div{padding:0 14px 14px}
+.pick{color:var(--mut);margin:6px 0 0}.pick b{color:var(--acc)}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mut);margin-left:6px}
+.votes{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:12px}
+.vote{border:1px solid var(--line);border-radius:6px;padding:9px 11px;background:#101820}
+.vote small{display:block;color:var(--mut);margin-top:2px}
+.final{margin-top:14px;font-size:16px;font-weight:700}
+svg text{font-family:inherit}
+</style>
+</head>
+<body>
+<main>
+  <h1>Simulasi Random Forest</h1>
+  <p class="sub">Studi kasus: Prediksi tingkat kemacetan lalu lintas di waktu tertentu. Setiap tahapan dihitung otomatis: bootstrap sampling, entropy, gain, split info, gain ratio, pohon keputusan, lalu mayoritas vote.
+    <span class="badge" id="src">memuat…</span></p>
+
+  <h2>1. Data kondisi lalu lintas</h2>
+  <div class="card scroll"><table id="tbl-data"></table></div>
+
+  <h2>2. Pengaturan hutan</h2>
+  <div class="card"><div class="row">
+    <label>Jumlah pohon<input id="ntrees" type="number" min="1" max="15" value="3"></label>
+    <label>Atribut acak per node (m)<input id="m" type="number" min="1" max="4" value="2"></label>
+    <label>Seed acak<input id="seed" type="number" min="0" value="3"></label>
+    <button id="btn-build">Bangun hutan</button>
+    <button id="btn-seed" class="alt">Seed acak baru</button>
+  </div></div>
+
+  <h2>3. Pohon keputusan</h2>
+  <div id="trees"></div>
+
+  <h2>4. Prediksi data baru</h2>
+  <div class="card">
+    <div class="row" id="form"></div>
+    <div id="result"></div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const f5 = x => (Math.abs(x) < 5e-6 ? 0 : Number(x)).toFixed(5).replace('.', ',');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const cls = v => `<span class="${v === 'Macet' ? 'macet' : 'lancar'}">${esc(v)}</span>`;
+let FOREST = null, PATHS = null;
+
+async function loadForest(useInputs) {
+  let url = '/api/forest';
+  if (useInputs) {
+    url += '?' + new URLSearchParams({seed: $('#seed').value, n_trees: $('#ntrees').value, m: $('#m').value});
+  }
+  const r = await fetch(url);
+  FOREST = await r.json();
+  PATHS = null;
+  $('#ntrees').value = FOREST.meta.n_trees;
+  $('#m').value = FOREST.meta.m;
+  $('#seed').value = FOREST.meta.seed;
+  $('#src').textContent = FOREST.source === 'joblib' ? 'model: rf_kemacetan.joblib' : 'dibangun ulang oleh rf_engine';
+  render();
+}
+
+function render() {
+  const M = FOREST.meta;
+  // 1. dataset
+  $('#tbl-data').innerHTML = '<tr><th>No</th>' + M.attrs.map(a => `<th>${a}</th>`).join('') + `<th>${M.target}</th></tr>` +
+    FOREST.dataset.map(r => `<tr><td>${r.No}</td>${M.attrs.map(a => `<td>${esc(r[a])}</td>`).join('')}<td>${cls(r[M.target])}</td></tr>`).join('');
+  // 3. pohon
+  $('#trees').innerHTML = FOREST.trees.map((t, i) => treeBlock(t, i)).join('');
+  // 4. form
+  if (!$('#form').children.length || $('#form').dataset.k !== M.attrs.join()) {
+    $('#form').dataset.k = M.attrs.join();
+    $('#form').innerHTML = M.attrs.map(a => `<label>${a}<select id="f-${a}">${M.domains[a].map(v => `<option>${esc(v)}</option>`).join('')}</select></label>`).join('') +
+      '<button id="btn-pred">Prediksi</button>';
+    $('#btn-pred').onclick = predict;
+  }
+  $('#result').innerHTML = '';
+}
+
+function treeBlock(t, i) {
+  const rows = t.bootstrap_rows.map((r, k) => `<tr><td>${t.bootstrap_idx[k] + 1}</td>${FOREST.meta.attrs.map(a => `<td>${esc(r[a])}</td>`).join('')}<td>${cls(r[FOREST.meta.target])}</td></tr>`).join('');
+  return `<details ${i === 0 ? 'open' : ''}><summary>Pohon ${t.index}</summary><div>
+    <h5>Hasil bootstrap sampling (${FOREST.meta.n_data} data, dengan pengembalian)</h5>
+    <div class="scroll"><table><tr><th>No asal</th>${FOREST.meta.attrs.map(a => `<th>${a}</th>`).join('')}<th>${FOREST.meta.target}</th></tr>${rows}</table></div>
+    <h5>Perhitungan tiap node</h5>${t.logs.map(nodeTable).join('')}
+    <h5>Pohon keputusan</h5><div class="scroll" id="svg-${t.index}">${treeSVG(t.tree, null)}</div>
+  </div></details>`;
+}
+
+function nodeTable(l) {
+  const nama = 'Root' + l.path.map(p => ` › ${p[0]}=${p[1]}`).join('');
+  let h = `<h5>Node: ${esc(nama)} <small>— atribut acak (m): ${l.candidates.map(esc).join(', ')}</small></h5><div class="scroll"><table>
+    <tr><th>Node</th><th>Jumlah</th><th>Lancar</th><th>Macet</th><th>Entropy</th><th>Gain</th><th>Split Info</th><th>Gain Ratio</th></tr>
+    <tr class="tot"><td>Total</td><td>${l.n}</td><td>${l.counts.Lancar}</td><td>${l.counts.Macet}</td><td>${f5(l.entropy)}</td><td></td><td></td><td></td></tr>`;
+  l.candidates.forEach(a => {
+    const r = l.analysis[a];
+    h += `<tr class="attr ${a === l.best ? 'best' : ''}"><td>${esc(a)}</td><td></td><td></td><td></td><td></td><td>${f5(r.gain)}</td><td>${f5(r.split_info)}</td><td>${f5(r.gain_ratio)}</td></tr>`;
+    r.values.forEach(v => {
+      h += `<tr><td class="ind">${esc(v.value)}</td><td>${v.n}</td><td>${v.counts.Lancar}</td><td>${v.counts.Macet}</td><td>${f5(v.entropy)}</td><td></td><td>${f5(v.split_part)}</td><td></td></tr>`;
+    });
+  });
+  return h + `</table></div><p class="pick">Gain ratio tertinggi dimiliki atribut <b>${esc(l.best)}</b>, sehingga dipilih sebagai node pemisah.</p>`;
+}
+
+function treeSVG(root, path) {
+  const XG = 122, YG = 84, nodes = [], edges = [];
+  let leaf = 0, maxD = 0;
+  function lay(n, d, on) {
+    const o = {n, d, on, x: 0};
+    nodes.push(o); maxD = Math.max(maxD, d);
+    if (n.type === 'leaf') { o.x = leaf++; return o; }
+    const kids = n.children.map(ch => {
+      const f = !!path && on && d < path.length && path[d].attr === n.attr && path[d].value === ch.value;
+      const c = lay(ch.node, d + 1, f);
+      edges.push({a: o, b: c, v: ch.value, f});
+      return c;
+    });
+    o.x = kids.reduce((s, k) => s + k.x, 0) / kids.length;
+    return o;
+  }
+  lay(root, 0, true);
+  const W = leaf * XG + 20, H = (maxD + 1) * YG + 10;
+  const px = o => o.x * XG + XG / 2 + 10, py = o => o.d * YG + 32;
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  edges.forEach(e => {
+    const x1 = px(e.a), y1 = py(e.a) + 16, x2 = px(e.b), y2 = py(e.b) - 16;
+    s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${e.f ? '#ee7a45' : '#5c8f4a'}" stroke-width="${e.f ? 3 : 1.5}"/>`;
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, w = e.v.length * 6.4 + 10;
+    s += `<rect x="${mx - w / 2}" y="${my - 9}" width="${w}" height="16" rx="4" fill="#151c25"/><text x="${mx}" y="${my + 3}" font-size="11" text-anchor="middle" fill="#c9d6e3">${esc(e.v)}</text>`;
+  });
+  nodes.forEach(o => {
+    const x = px(o), y = py(o), hl = !!path && o.on, stroke = hl ? '#ee7a45' : 'none', sw = hl ? 3 : 0;
+    if (o.n.type === 'node') {
+      s += `<ellipse cx="${x}" cy="${y}" rx="50" ry="17" fill="#3f7a35" stroke="${stroke}" stroke-width="${sw}"/><text x="${x}" y="${y + 4}" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">${esc(o.n.attr)}</text>`;
+    } else {
+      const c = o.n.label === 'Macet' ? '#d9534f' : '#4ea34a';
+      s += `<rect x="${x - 38}" y="${y - 14}" width="76" height="28" rx="7" fill="${c}" stroke="${stroke}" stroke-width="${sw}"/><text x="${x}" y="${y + 4}" font-size="12" font-weight="700" text-anchor="middle" fill="#fff">${esc(o.n.label)}</text>`;
+    }
+  });
+  return s + '</svg>';
+}
+
+async function predict() {
+  const sample = {};
+  FOREST.meta.attrs.forEach(a => sample[a] = $('#f-' + a).value);
+  const r = await fetch('/api/predict', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({sample, seed: +$('#seed').value, n_trees: +$('#ntrees').value, m: +$('#m').value})
+  });
+  const res = await r.json();
+  if (res.error) { $('#result').innerHTML = `<p class="macet">${esc(res.error)}</p>`; return; }
+  res.votes.forEach(v => {
+    const t = FOREST.trees.find(t => t.index === v.tree);
+    const box = $('#svg-' + v.tree);
+    if (t && box) box.innerHTML = treeSVG(t.tree, v.path);
+  });
+  $('#result').innerHTML = `<div class="votes">${res.votes.map(v => `<div class="vote"><b>Pohon ${v.tree}:</b> ${cls(v.label)}<small>${v.path.map(p => esc(p.attr) + '=' + esc(p.value)).join(' → ') || 'langsung ke daun'}</small></div>`).join('')}</div>
+    <p>Suara Lancar: <b>${res.counts.Lancar}</b>, Macet: <b>${res.counts.Macet}</b></p>
+    <p class="final">Prediksi: lalu lintas ${cls(res.final)}</p>`;
+}
+
+$('#btn-build').onclick = () => loadForest(true);
+$('#btn-seed').onclick = () => { $('#seed').value = Math.floor(Math.random() * 9999) + 1; loadForest(true); };
+loadForest(false);
+</script>
+</body>
+</html>
